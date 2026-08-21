@@ -3,16 +3,21 @@ import SwiftUI
 struct CleanerView: View {
     @Environment(\.appLanguage) private var language
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     @State private var records: [CleanerAppRecord] = []
     @State private var selectedBundleIDs = Set<String>()
     @State private var searchText = ""
     @State private var sortOrder: CleanerSortOrder = .largestFirst
+
     @State private var isScanning = false
     @State private var isCleaning = false
     @State private var scannedAppCount = 0
     @State private var hasLoaded = false
     @State private var scanID = UUID()
+
     @State private var activeAlert: CleanerAlert?
+
+    // NIGHTSHIFT's own accessible cache/temp scope.
     @State private var systemCache = SystemCacheUsage.unavailable
     @State private var isScanningSystemCache = false
     @State private var isCleaningSystemCache = false
@@ -20,18 +25,30 @@ struct CleanerView: View {
 
     private var filteredRecords: [CleanerAppRecord] {
         let matchingRecords: [CleanerAppRecord]
+
         if searchText.isEmpty {
             matchingRecords = records
         } else {
             let query = searchText.folding(
-                options: [.caseInsensitive, .diacriticInsensitive],
+                options: [
+                    .caseInsensitive,
+                    .diacriticInsensitive
+                ],
                 locale: language.locale
             )
+
             matchingRecords = records.filter {
                 $0.app.displayName.folding(
-                    options: [.caseInsensitive, .diacriticInsensitive],
+                    options: [
+                        .caseInsensitive,
+                        .diacriticInsensitive
+                    ],
                     locale: language.locale
-                ).contains(query) || $0.app.bundleID.lowercased().contains(query.lowercased())
+                ).contains(query)
+                ||
+                $0.app.bundleID
+                    .lowercased()
+                    .contains(query.lowercased())
             }
         }
 
@@ -49,25 +66,37 @@ struct CleanerView: View {
     }
 
     private var areAllVisibleRecordsSelected: Bool {
-        !visibleBundleIDs.isEmpty && visibleBundleIDs.allSatisfy(selectedBundleIDs.contains)
+        !visibleBundleIDs.isEmpty &&
+        visibleBundleIDs.allSatisfy(selectedBundleIDs.contains)
     }
 
     private var totalAvailableBytes: Int64 {
-        records.reduce(0) { $0 + $1.usage.totalBytes }
+        records.reduce(0) {
+            $0 + $1.usage.totalBytes
+        }
     }
 
     private var selectedBytes: Int64 {
         records.reduce(0) { result, record in
-            result + (selectedBundleIDs.contains(record.id) ? record.usage.totalBytes : 0)
+            result +
+            (
+                selectedBundleIDs.contains(record.id)
+                    ? record.usage.totalBytes
+                    : 0
+            )
         }
     }
 
     private var isBusy: Bool {
-        isScanning || isCleaning || isScanningSystemCache || isCleaningSystemCache
+        isScanning ||
+        isCleaning ||
+        isScanningSystemCache ||
+        isCleaningSystemCache
     }
 
     private var systemCacheBusy: Bool {
-        isScanningSystemCache || isCleaningSystemCache
+        isScanningSystemCache ||
+        isCleaningSystemCache
     }
 
     var body: some View {
@@ -83,33 +112,50 @@ struct CleanerView: View {
                     prompt: language.text("cleaner.search"),
                     clearLabel: language.text("common.clear")
                 )
+
                 Divider()
+
                 cleanerList
                     .listStyle(.insetGrouped)
             }
-            .navigationTitle(language.text("cleaner.title"))
+            .navigationTitle(
+                language.text("cleaner.title")
+            )
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
-            .toolbar { toolbarContent }
-            .alert(item: $activeAlert, content: alert(for:))
+            .toolbar {
+                toolbarContent
+            }
+            .alert(
+                item: $activeAlert,
+                content: alert(for:)
+            )
             .confirmationDialog(
-                "Clean Global Cache?",
+                "Clean NIGHTSHIFT Cache?",
                 isPresented: $showSystemCleanConfirmation,
                 titleVisibility: .visible
             ) {
-                Button("Clean Safe Cache", role: .destructive) {
+                Button(
+                    "Clean Cache",
+                    role: .destructive
+                ) {
                     cleanSystemCache()
                 }
-                Button("Cancel", role: .cancel) {}
+
+                Button(
+                    "Cancel",
+                    role: .cancel
+                ) {}
             } message: {
                 Text(
-                    systemCache.accessible
-                        ? "This removes contents of /var/mobile/Library/Caches only. Logs, databases, preferences and other system state are left untouched."
-                        : "The global cache directory is not accessible from this build."
+                    "This removes only disposable cache and temporary files accessible inside NIGHTSHIFT's own sandbox. iOS system files and other apps are not modified."
                 )
             }
             .onAppear {
-                guard !hasLoaded else { return }
+                guard !hasLoaded else {
+                    return
+                }
+
                 hasLoaded = true
                 reload()
                 scanSystemCache()
@@ -117,34 +163,49 @@ struct CleanerView: View {
         }
     }
 
+    // MARK: - NIGHTSHIFT Cache
+
     private var systemCacheSection: some View {
         CyberPanel {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(
+                alignment: .leading,
+                spacing: 10
+            ) {
                 HStack {
-                    Label("SYSTEM CACHE", systemImage: "internaldrive")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AppTheme.secondaryAccent)
+                    Label(
+                        "NIGHTSHIFT CACHE",
+                        systemImage: "internaldrive"
+                    )
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(
+                        AppTheme.secondaryAccent
+                    )
 
                     Spacer()
 
                     if isScanningSystemCache {
                         ProgressView()
                             .controlSize(.mini)
-                    } else if systemCache.accessible {
-                        Text(sizeText(systemCache.bytes))
-                            .font(.headline.monospacedDigit())
-                            .foregroundStyle(AppTheme.accent)
                     } else {
-                        Text("UNAVAILABLE")
-                            .font(AppTheme.monoFont)
-                            .foregroundStyle(.secondary)
+                        Text(
+                            sizeText(
+                                systemCache.bytes
+                            )
+                        )
+                        .font(
+                            .headline.monospacedDigit()
+                        )
+                        .foregroundStyle(
+                            systemCache.bytes > 0
+                                ? AppTheme.accent
+                                : .secondary
+                        )
                     }
                 }
 
                 Text(
-                    systemCache.accessible
-                        ? "\(systemCache.itemCount.formatted()) cache files found in the safe global cache scope."
-                        : "This scope requires the same elevated filesystem access used by 3105."
+                    "\(systemCache.itemCount.formatted()) " +
+                    "cache/temp files accessible to NIGHTSHIFT."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -153,8 +214,11 @@ struct CleanerView: View {
                     Button {
                         scanSystemCache()
                     } label: {
-                        Label("Analyze", systemImage: "waveform.path.ecg")
-                            .frame(maxWidth: .infinity)
+                        Label(
+                            "Analyze",
+                            systemImage: "waveform.path.ecg"
+                        )
+                        .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     .disabled(systemCacheBusy)
@@ -164,18 +228,21 @@ struct CleanerView: View {
                     } label: {
                         HStack(spacing: 6) {
                             if isCleaningSystemCache {
-                                ProgressView().controlSize(.small)
+                                ProgressView()
+                                    .controlSize(.small)
                             } else {
-                                Image(systemName: "sparkles")
+                                Image(systemName: "trash")
                             }
-                            Text("Clean Safe Cache")
+
+                            Text("Clean Cache")
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(AppTheme.secondaryAccent)
+                    .tint(
+                        AppTheme.secondaryAccent
+                    )
                     .disabled(
-                        !systemCache.accessible ||
                         systemCache.bytes <= 0 ||
                         systemCacheBusy ||
                         isCleaning
@@ -185,10 +252,14 @@ struct CleanerView: View {
         }
     }
 
+    // MARK: - List
+
     @ViewBuilder
     private var cleanerList: some View {
         if records.isEmpty {
-            List { emptySection }
+            List {
+                emptySection
+            }
         } else {
             List {
                 summarySection
@@ -199,19 +270,42 @@ struct CleanerView: View {
 
     private var summarySection: some View {
         Section {
-            LabeledContent(language.text("cleaner.available")) {
-                Text(sizeText(totalAvailableBytes))
-                    .monospacedDigit()
+            LabeledContent(
+                language.text("cleaner.available")
+            ) {
+                Text(
+                    sizeText(totalAvailableBytes)
+                )
+                .monospacedDigit()
             }
-            LabeledContent(language.text("cleaner.selected")) {
-                Text(language.text("cleaner.selected_summary", Int64(selectedBundleIDs.count), sizeText(selectedBytes)))
-                    .monospacedDigit()
+
+            LabeledContent(
+                language.text("cleaner.selected")
+            ) {
+                Text(
+                    language.text(
+                        "cleaner.selected_summary",
+                        Int64(
+                            selectedBundleIDs.count
+                        ),
+                        sizeText(selectedBytes)
+                    )
+                )
+                .monospacedDigit()
             }
+
             cleanAction
+
         } header: {
-            Label(language.text("cleaner.limited_mode"), systemImage: "checkmark.shield")
+            Label(
+                language.text("cleaner.limited_mode"),
+                systemImage: "checkmark.shield"
+            )
+
         } footer: {
-            Text(language.text("cleaner.scope_footer"))
+            Text(
+                language.text("cleaner.scope_footer")
+            )
         }
     }
 
@@ -219,18 +313,36 @@ struct CleanerView: View {
         Section {
             if filteredRecords.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: AppTheme.emptyIconSize, weight: .light))
-                        .foregroundStyle(.secondary)
-                    Text(language.text("browser.search_empty"))
-                        .font(.headline)
-                    Text(language.text("cleaner.search_empty_message"))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    Image(
+                        systemName: "magnifyingglass"
+                    )
+                    .font(
+                        .system(
+                            size: AppTheme.emptyIconSize,
+                            weight: .light
+                        )
+                    )
+                    .foregroundStyle(.secondary)
+
+                    Text(
+                        language.text(
+                            "browser.search_empty"
+                        )
+                    )
+                    .font(.headline)
+
+                    Text(
+                        language.text(
+                            "cleaner.search_empty_message"
+                        )
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 20)
+
             } else {
                 ForEach(filteredRecords) { record in
                     Button {
@@ -242,75 +354,147 @@ struct CleanerView: View {
                     .disabled(isCleaning)
                 }
             }
+
         } header: {
             HStack(spacing: 8) {
-                Text(language.text("cleaner.apps_with_cache", Int64(filteredRecords.count)))
+                Text(
+                    language.text(
+                        "cleaner.apps_with_cache",
+                        Int64(filteredRecords.count)
+                    )
+                )
+
                 Spacer()
+
                 if isScanning {
                     ProgressView()
                         .controlSize(.mini)
-                    Text(language.text("cleaner.scanned_count", Int64(scannedAppCount)))
+
+                    Text(
+                        language.text(
+                            "cleaner.scanned_count",
+                            Int64(scannedAppCount)
+                        )
+                    )
                 }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
             .textCase(nil)
+
         } footer: {
             if !records.isEmpty {
-                Text(language.text("cleaner.apps_footer"))
+                Text(
+                    language.text(
+                        "cleaner.apps_footer"
+                    )
+                )
             }
         }
     }
 
-    private func applicationRow(_ record: CleanerAppRecord) -> some View {
+    private func applicationRow(
+        _ record: CleanerAppRecord
+    ) -> some View {
         HStack(spacing: 10) {
-            BrowserAppIcon(app: record.app)
+            BrowserAppIcon(
+                app: record.app
+            )
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(record.app.displayName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                Text(record.app.bundleID)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            VStack(
+                alignment: .leading,
+                spacing: 2
+            ) {
+                Text(
+                    record.app.displayName
+                )
+                .font(
+                    .subheadline.weight(.semibold)
+                )
+                .foregroundStyle(.primary)
+                .lineLimit(
+                    dynamicTypeSize.isAccessibilitySize
+                        ? 2
+                        : 1
+                )
+
+                Text(
+                    record.app.bundleID
+                )
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             }
 
             Spacer(minLength: 8)
 
-            Text(sizeText(record.usage.totalBytes))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            Text(
+                sizeText(
+                    record.usage.totalBytes
+                )
+            )
+            .font(
+                .caption.monospacedDigit()
+            )
+            .foregroundStyle(.secondary)
 
-            Image(systemName: selectedBundleIDs.contains(record.id) ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: AppTheme.selectionIconSize, weight: .medium))
-                .foregroundStyle(selectedBundleIDs.contains(record.id) ? AppTheme.accent : Color.secondary)
-                .accessibilityHidden(true)
+            Image(
+                systemName:
+                    selectedBundleIDs.contains(record.id)
+                        ? "checkmark.circle.fill"
+                        : "circle"
+            )
+            .font(
+                .system(
+                    size: AppTheme.selectionIconSize,
+                    weight: .medium
+                )
+            )
+            .foregroundStyle(
+                selectedBundleIDs.contains(record.id)
+                    ? AppTheme.accent
+                    : Color.secondary
+            )
+            .accessibilityHidden(true)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(
+            children: .combine
+        )
         .accessibilityValue(
             selectedBundleIDs.contains(record.id)
-                ? language.text("cleaner.accessibility_selected")
-                : language.text("cleaner.accessibility_not_selected")
+                ? language.text(
+                    "cleaner.accessibility_selected"
+                )
+                : language.text(
+                    "cleaner.accessibility_not_selected"
+                )
         )
     }
+
+    // MARK: - Toolbar
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         if !records.isEmpty {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItem(
+                placement: .navigationBarLeading
+            ) {
                 selectionMenu
             }
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
+
+            ToolbarItemGroup(
+                placement: .navigationBarTrailing
+            ) {
                 sortMenu
                 refreshButton
             }
         } else {
-            ToolbarItem(placement: .navigationBarLeading) {
+            ToolbarItem(
+                placement: .navigationBarLeading
+            ) {
                 refreshButton
             }
         }
@@ -319,66 +503,112 @@ struct CleanerView: View {
     private var selectionMenu: some View {
         Menu {
             Button {
-                selectedBundleIDs = CleanerCatalog.selectingAllVisible(
-                    visibleBundleIDs,
-                    preserving: selectedBundleIDs
-                )
+                selectedBundleIDs =
+                    CleanerCatalog.selectingAllVisible(
+                        visibleBundleIDs,
+                        preserving: selectedBundleIDs
+                    )
             } label: {
                 Label(
                     searchText.isEmpty
-                        ? language.text("patch.select_all")
-                        : language.text("cleaner.select_all_results"),
+                        ? language.text(
+                            "patch.select_all"
+                        )
+                        : language.text(
+                            "cleaner.select_all_results"
+                        ),
                     systemImage: "checkmark.circle"
                 )
             }
-            .disabled(areAllVisibleRecordsSelected)
+            .disabled(
+                areAllVisibleRecordsSelected
+            )
 
             Button {
                 selectedBundleIDs.removeAll()
             } label: {
-                Label(language.text("patch.deselect_all"), systemImage: "circle")
+                Label(
+                    language.text(
+                        "patch.deselect_all"
+                    ),
+                    systemImage: "circle"
+                )
             }
-            .disabled(selectedBundleIDs.isEmpty)
+            .disabled(
+                selectedBundleIDs.isEmpty
+            )
+
         } label: {
-            Image(systemName: "checklist")
+            Image(
+                systemName: "checklist"
+            )
         }
         .disabled(isBusy)
-        .accessibilityLabel(language.text("cleaner.selection_actions"))
+        .accessibilityLabel(
+            language.text(
+                "cleaner.selection_actions"
+            )
+        )
     }
 
     private var sortMenu: some View {
         Menu {
-            Picker(language.text("cleaner.sort"), selection: $sortOrder) {
+            Picker(
+                language.text("cleaner.sort"),
+                selection: $sortOrder
+            ) {
                 Label(
-                    language.text("cleaner.sort_largest_first"),
+                    language.text(
+                        "cleaner.sort_largest_first"
+                    ),
                     systemImage: "arrow.down"
                 )
-                .tag(CleanerSortOrder.largestFirst)
+                .tag(
+                    CleanerSortOrder.largestFirst
+                )
 
                 Label(
-                    language.text("cleaner.sort_smallest_first"),
+                    language.text(
+                        "cleaner.sort_smallest_first"
+                    ),
                     systemImage: "arrow.up"
                 )
-                .tag(CleanerSortOrder.smallestFirst)
+                .tag(
+                    CleanerSortOrder.smallestFirst
+                )
             }
         } label: {
-            Image(systemName: "arrow.up.arrow.down")
+            Image(
+                systemName: "arrow.up.arrow.down"
+            )
         }
         .disabled(isBusy)
-        .accessibilityLabel(language.text("cleaner.sort"))
+        .accessibilityLabel(
+            language.text("cleaner.sort")
+        )
     }
 
     private var refreshButton: some View {
-        Button { reload() } label: {
+        Button {
+            reload()
+        } label: {
             if isScanning {
                 ProgressView()
             } else {
-                Image(systemName: "arrow.clockwise")
+                Image(
+                    systemName: "arrow.clockwise"
+                )
             }
         }
         .disabled(isBusy)
-        .accessibilityLabel(language.text("cleaner.scan_again"))
+        .accessibilityLabel(
+            language.text(
+                "cleaner.scan_again"
+            )
+        )
     }
+
+    // MARK: - Clean Action
 
     private var cleanAction: some View {
         Button {
@@ -391,42 +621,92 @@ struct CleanerView: View {
                 } else {
                     Image(systemName: "trash")
                 }
+
                 Text(
                     isCleaning
-                        ? language.text("cleaner.cleaning")
-                        : language.text("cleaner.clean_button", sizeText(selectedBytes))
+                        ? language.text(
+                            "cleaner.cleaning"
+                        )
+                        : language.text(
+                            "cleaner.clean_button",
+                            sizeText(selectedBytes)
+                        )
                 )
                 .fontWeight(.semibold)
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: 44
+            )
         }
         .buttonStyle(.borderedProminent)
-        .disabled(selectedBundleIDs.isEmpty || isBusy)
+        .disabled(
+            selectedBundleIDs.isEmpty ||
+            isBusy
+        )
         .padding(.vertical, 4)
     }
+
+    // MARK: - Empty State
 
     private var emptySection: some View {
         Section {
             VStack(spacing: 12) {
                 if isScanning {
                     ProgressView()
-                    Text(language.text("cleaner.scanning"))
-                        .font(.headline)
-                    Text(language.text("cleaner.scanned_count", Int64(scannedAppCount)))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+
+                    Text(
+                        language.text(
+                            "cleaner.scanning"
+                        )
+                    )
+                    .font(.headline)
+
+                    Text(
+                        language.text(
+                            "cleaner.scanned_count",
+                            Int64(scannedAppCount)
+                        )
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
                 } else {
-                    Image(systemName: "checkmark.circle")
-                        .font(.system(size: AppTheme.emptyIconSize, weight: .light))
-                        .foregroundStyle(.secondary)
-                    Text(language.text("cleaner.empty_title"))
-                        .font(.headline)
-                    Text(language.text("cleaner.empty_message"))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Button(language.text("cleaner.scan_again")) { reload() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
+                    Image(
+                        systemName: "checkmark.circle"
+                    )
+                    .font(
+                        .system(
+                            size: AppTheme.emptyIconSize,
+                            weight: .light
+                        )
+                    )
+                    .foregroundStyle(.secondary)
+
+                    Text(
+                        language.text(
+                            "cleaner.empty_title"
+                        )
+                    )
+                    .font(.headline)
+
+                    Text(
+                        language.text(
+                            "cleaner.empty_message"
+                        )
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                    Button(
+                        language.text(
+                            "cleaner.scan_again"
+                        )
+                    ) {
+                        reload()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
                 }
             }
             .multilineTextAlignment(.center)
@@ -435,33 +715,70 @@ struct CleanerView: View {
         }
     }
 
-    private func alert(for alert: CleanerAlert) -> Alert {
+    // MARK: - Alerts
+
+    private func alert(
+        for alert: CleanerAlert
+    ) -> Alert {
         switch alert {
         case .confirmation:
             return Alert(
-                title: Text(language.text("cleaner.confirm_title")),
+                title: Text(
+                    language.text(
+                        "cleaner.confirm_title"
+                    )
+                ),
                 message: Text(
                     language.text(
                         "cleaner.confirm_message",
-                        Int64(selectedBundleIDs.count),
+                        Int64(
+                            selectedBundleIDs.count
+                        ),
                         sizeText(selectedBytes)
                     )
                 ),
-                primaryButton: .destructive(Text(language.text("cleaner.confirm_action"))) {
+                primaryButton: .destructive(
+                    Text(
+                        language.text(
+                            "cleaner.confirm_action"
+                        )
+                    )
+                ) {
                     cleanSelectedApps()
                 },
-                secondaryButton: .cancel(Text(language.text("common.cancel")))
+                secondaryButton: .cancel(
+                    Text(
+                        language.text(
+                            "common.cancel"
+                        )
+                    )
+                )
             )
+
         case .result(let message):
             return Alert(
-                title: Text(language.text("cleaner.result_title")),
+                title: Text(
+                    language.text(
+                        "cleaner.result_title"
+                    )
+                ),
                 message: Text(message),
-                dismissButton: .default(Text(language.text("common.done")))
+                dismissButton: .default(
+                    Text(
+                        language.text(
+                            "common.done"
+                        )
+                    )
+                )
             )
         }
     }
 
-    private func toggleSelection(_ bundleID: String) {
+    // MARK: - Selection
+
+    private func toggleSelection(
+        _ bundleID: String
+    ) {
         if selectedBundleIDs.contains(bundleID) {
             selectedBundleIDs.remove(bundleID)
         } else {
@@ -469,17 +786,28 @@ struct CleanerView: View {
         }
     }
 
+    // MARK: - Application Scan
+
     private func reload() {
-        guard !isBusy else { return }
+        guard !isBusy else {
+            return
+        }
+
 #if targetEnvironment(simulator)
-        if ProcessInfo.processInfo.arguments.contains("--simulate-cleaner-empty") {
+
+        if ProcessInfo.processInfo.arguments.contains(
+            "--simulate-cleaner-empty"
+        ) {
             records = []
             selectedBundleIDs = []
             scannedAppCount = 388
             isScanning = false
             return
         }
-        if ProcessInfo.processInfo.arguments.contains("--simulate-cleaner-data") {
+
+        if ProcessInfo.processInfo.arguments.contains(
+            "--simulate-cleaner-data"
+        ) {
             let samples = [
                 CleanerAppRecord(
                     app: InstalledApp(
@@ -524,245 +852,477 @@ struct CleanerView: View {
                     )
                 )
             ]
+
             records = samples
-            selectedBundleIDs = Set(samples.prefix(2).map(\.id))
+            selectedBundleIDs = Set(
+                samples.prefix(2).map(\.id)
+            )
             scannedAppCount = 388
             isScanning = false
-            if ProcessInfo.processInfo.arguments.contains("--simulate-cleaner-warning") {
+
+            if ProcessInfo.processInfo.arguments.contains(
+                "--simulate-cleaner-warning"
+            ) {
                 activeAlert = .confirmation
             }
+
             return
         }
+
 #endif
+
         let requestID = UUID()
+
         scanID = requestID
         isScanning = true
         scannedAppCount = 0
         selectedBundleIDs.removeAll()
         records.removeAll()
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(
+            qos: .userInitiated
+        ).async {
             var scannedBundleIDs = Set<String>()
             var discoveredRecords: [CleanerAppRecord] = []
             var processedCount = 0
 
-            func publish(force: Bool = false) {
-                guard force || processedCount.isMultiple(of: 8) else { return }
-                let snapshot = discoveredRecords.sorted {
-                    $0.app.displayName.localizedCaseInsensitiveCompare($1.app.displayName) == .orderedAscending
+            func publish(
+                force: Bool = false
+            ) {
+                guard
+                    force ||
+                    processedCount.isMultiple(of: 8)
+                else {
+                    return
                 }
+
+                let snapshot =
+                    discoveredRecords.sorted {
+                        $0.app.displayName
+                            .localizedCaseInsensitiveCompare(
+                                $1.app.displayName
+                            ) == .orderedAscending
+                    }
+
                 let count = processedCount
+
                 DispatchQueue.main.async {
-                    guard scanID == requestID else { return }
+                    guard scanID == requestID else {
+                        return
+                    }
+
                     records = snapshot
                     scannedAppCount = count
                 }
             }
 
-            func scanNewApps(_ applications: [InstalledApp]) {
+            func scanNewApps(
+                _ applications: [InstalledApp]
+            ) {
                 let metadata = Dictionary(
                     applications.map {
                         ($0.bundleID, $0)
                     },
-                    uniquingKeysWith: { first, _ in first }
-                )
-                let catalogApplications = applications.map {
-                    CleanerResolvedApplication(
-                        bundleID: $0.bundleID,
-                        name: $0.name,
-                        containerPath: $0.containerPath,
-                        version: $0.version
-                    )
-                }
-                let newRecords = CleanerCatalog.scanNewApplications(
-                    catalogApplications,
-                    scannedBundleIDs: &scannedBundleIDs,
-                    shouldIncludeBundleID: {
-                        ContainerPresentationPolicy.shouldShow(bundleID: $0)
-                    },
-                    activateContainer: { application in
-                    var activationError: NSString?
-                        return MCMActivateContainerPath(
-                        2,
-                            application.bundleID,
-                        false,
-                        &activationError
-                        )
-                    },
-                    isValidContainerPath: ContainerStore.isApplicationContainerPath,
-                    usageForContainer: { containerPath in
-                        try? LimitedCleanerService.scan(
-                            containerURL: URL(fileURLWithPath: containerPath, isDirectory: true),
-                            rootValidator: { ContainerStore.isApplicationContainerPath($0.path) }
-                        )
+                    uniquingKeysWith: {
+                        first,
+                        _
+                    in
+                        first
                     }
                 )
-                processedCount = scannedBundleIDs.count
-                for record in newRecords {
-                    let original = metadata[record.bundleID]
-                    let resolvedApp = InstalledApp(
-                        bundleID: record.bundleID,
-                        name: record.application.name,
-                        containerPath: record.containerPath,
-                        version: record.application.version,
-                        icon: original?.icon
+
+                let catalogApplications =
+                    applications.map {
+                        CleanerResolvedApplication(
+                            bundleID: $0.bundleID,
+                            name: $0.name,
+                            containerPath: $0.containerPath,
+                            version: $0.version
+                        )
+                    }
+
+                let newRecords =
+                    CleanerCatalog.scanNewApplications(
+                        catalogApplications,
+                        scannedBundleIDs: &scannedBundleIDs,
+                        shouldIncludeBundleID: {
+                            ContainerPresentationPolicy
+                                .shouldShow(
+                                    bundleID: $0
+                                )
+                        },
+                        activateContainer: {
+                            application in
+
+                            var activationError:
+                                NSString?
+
+                            return MCMActivateContainerPath(
+                                2,
+                                application.bundleID,
+                                false,
+                                &activationError
+                            )
+                        },
+                        isValidContainerPath:
+                            ContainerStore
+                                .isApplicationContainerPath,
+                        usageForContainer: {
+                            containerPath in
+
+                            try? LimitedCleanerService.scan(
+                                containerURL: URL(
+                                    fileURLWithPath:
+                                        containerPath,
+                                    isDirectory: true
+                                ),
+                                rootValidator: {
+                                    ContainerStore
+                                        .isApplicationContainerPath(
+                                            $0.path
+                                        )
+                                }
+                            )
+                        }
                     )
+
+                processedCount =
+                    scannedBundleIDs.count
+
+                for record in newRecords {
+                    let original =
+                        metadata[record.bundleID]
+
+                    let resolvedApp =
+                        InstalledApp(
+                            bundleID: record.bundleID,
+                            name: record.application.name,
+                            containerPath:
+                                record.containerPath,
+                            version:
+                                record.application.version,
+                            icon: original?.icon
+                        )
+
                     discoveredRecords.append(
-                        CleanerAppRecord(app: resolvedApp, usage: record.usage)
+                        CleanerAppRecord(
+                            app: resolvedApp,
+                            usage: record.usage
+                        )
                     )
                 }
+
                 publish()
             }
 
-            let apiApps = ContainerStore.installedAppsFromAPI()
-            let dynamicIdentifiers = ContainerStore.dynamicAppIdentifiers()
-            let mcmApps = ContainerStore.installedAppsFromMCM(identifiers: dynamicIdentifiers)
-            scanNewApps(apiApps + mcmApps)
+            let apiApps =
+                ContainerStore.installedAppsFromAPI()
 
-            let launchServicesIdentifiers = ContainerStore.launchServicesStoreIdentifiers()
-            let candidates = MHAIdentifierCatalog.identifiers(
-                dynamic: dynamicIdentifiers,
-                installed: apiApps.map(\.bundleID),
-                research: ContainerStore.researchAppIdentifiers,
-                custom: [],
-                launchServices: launchServicesIdentifiers
+            let dynamicIdentifiers =
+                ContainerStore.dynamicAppIdentifiers()
+
+            let mcmApps =
+                ContainerStore.installedAppsFromMCM(
+                    identifiers: dynamicIdentifiers
+                )
+
+            scanNewApps(
+                apiApps + mcmApps
             )
-            log("cleaner: resolving \(candidates.count) MHA-C2 bundle candidates")
-            let mhaApps = ContainerStore.installedAppsFromMHACandidates(
-                identifiers: candidates
-            ) { progressiveApps in
-                scanNewApps(progressiveApps)
-            }
+
+            let launchServicesIdentifiers =
+                ContainerStore
+                    .launchServicesStoreIdentifiers()
+
+            let candidates =
+                MHAIdentifierCatalog.identifiers(
+                    dynamic: dynamicIdentifiers,
+                    installed: apiApps.map(
+                        \.bundleID
+                    ),
+                    research:
+                        ContainerStore
+                            .researchAppIdentifiers,
+                    custom: [],
+                    launchServices:
+                        launchServicesIdentifiers
+                )
+
+            log(
+                "cleaner: resolving " +
+                "\(candidates.count) MHA-C2 bundle candidates"
+            )
+
+            let mhaApps =
+                ContainerStore
+                    .installedAppsFromMHACandidates(
+                        identifiers: candidates
+                    ) { progressiveApps in
+                        scanNewApps(
+                            progressiveApps
+                        )
+                    }
+
             scanNewApps(mhaApps)
             publish(force: true)
 
             DispatchQueue.main.async {
-                guard scanID == requestID else { return }
+                guard scanID == requestID else {
+                    return
+                }
+
                 isScanning = false
+
                 log(
-                    "cleaner: scan complete bundles=\(processedCount) " +
-                        "reclaimableApps=\(discoveredRecords.count)"
+                    "cleaner: scan complete " +
+                    "bundles=\(processedCount) " +
+                    "reclaimableApps=" +
+                    "\(discoveredRecords.count)"
                 )
             }
         }
     }
 
+    // MARK: - NIGHTSHIFT Cache Scan
+
     private func scanSystemCache() {
-        guard !systemCacheBusy else { return }
+        guard !systemCacheBusy else {
+            return
+        }
+
         isScanningSystemCache = true
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            let usage = SystemCacheCleanerService.scan()
+        DispatchQueue.global(
+            qos: .userInitiated
+        ).async {
+            let usage =
+                SystemCacheCleanerService.scan()
 
             DispatchQueue.main.async {
                 systemCache = usage
                 isScanningSystemCache = false
+
                 log(
-                    "cleaner: global cache scan accessible=\(usage.accessible) " +
-                    "bytes=\(usage.bytes) items=\(usage.itemCount)"
+                    "cleaner: app cache scan " +
+                    "bytes=\(usage.bytes) " +
+                    "items=\(usage.itemCount) " +
+                    "accessible=\(usage.accessible)"
                 )
             }
         }
     }
 
+    // MARK: - NIGHTSHIFT Cache Clean
+
     private func cleanSystemCache() {
-        guard !isCleaningSystemCache else { return }
+        guard !isCleaningSystemCache else {
+            return
+        }
+
         isCleaningSystemCache = true
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = SystemCacheCleanerService.clean()
+        DispatchQueue.global(
+            qos: .userInitiated
+        ).async {
+            let result =
+                SystemCacheCleanerService.clean()
 
             DispatchQueue.main.async {
                 systemCache = result.after
                 isCleaningSystemCache = false
 
                 let message =
-                    "Global cache: \(sizeText(result.before.bytes)) → " +
+                    "Cache before: " +
+                    "\(sizeText(result.before.bytes))\n" +
+                    "Cache after: " +
                     "\(sizeText(result.after.bytes))\n" +
-                    "Freed: \(sizeText(result.freedBytes))\n" +
-                    "Removed: \(result.removedItemCount) items\n" +
-                    "Skipped/failed: \(result.failedItemCount)"
+                    "Freed: " +
+                    "\(sizeText(result.freedBytes))\n" +
+                    "Removed: " +
+                    "\(result.removedItemCount) items\n" +
+                    "Skipped: " +
+                    "\(result.failedItemCount)"
 
-                activeAlert = .result(message: message)
+                activeAlert =
+                    .result(
+                        message: message
+                    )
+
                 log(
-                    "cleaner: global cache cleaned freed=\(result.freedBytes) " +
-                    "removed=\(result.removedItemCount) failed=\(result.failedItemCount)"
+                    "cleaner: app cache cleaned " +
+                    "freed=\(result.freedBytes) " +
+                    "removed=\(result.removedItemCount) " +
+                    "failed=\(result.failedItemCount)"
                 )
             }
         }
     }
 
+    // MARK: - Application Cache Clean
+
     private func cleanSelectedApps() {
-        guard !isBusy else { return }
-        let selectedRecords = records.filter { selectedBundleIDs.contains($0.id) }
-        guard !selectedRecords.isEmpty else { return }
+        guard !isBusy else {
+            return
+        }
+
+        let selectedRecords =
+            records.filter {
+                selectedBundleIDs.contains(
+                    $0.id
+                )
+            }
+
+        guard !selectedRecords.isEmpty else {
+            return
+        }
+
         isCleaning = true
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            var updatedUsage: [String: LimitedCleanerUsage] = [:]
+        DispatchQueue.global(
+            qos: .userInitiated
+        ).async {
+            var updatedUsage:
+                [String: LimitedCleanerUsage] = [:]
+
             var freedBytes: Int64 = 0
             var removedItems = 0
             var failedItems = 0
             var unavailableApps = 0
 
             for record in selectedRecords {
-                guard let containerPath = ContainerStore.resolveAppContainerPath(
-                    bundleID: record.app.bundleID
-                ) else {
+                guard
+                    let containerPath =
+                        ContainerStore
+                            .resolveAppContainerPath(
+                                bundleID:
+                                    record.app.bundleID
+                            )
+                else {
                     unavailableApps += 1
-                    log("cleaner: bundle unavailable \(record.app.bundleID)")
+
+                    log(
+                        "cleaner: bundle unavailable " +
+                        "\(record.app.bundleID)"
+                    )
+
                     continue
                 }
 
                 do {
-                    let result = try LimitedCleanerService.clean(
-                        containerURL: URL(fileURLWithPath: containerPath, isDirectory: true),
-                        rootValidator: { ContainerStore.isApplicationContainerPath($0.path) }
-                    )
-                    updatedUsage[record.id] = result.after
-                    freedBytes += result.freedBytes
-                    removedItems += result.removedItemCount
-                    failedItems += result.failedItemCount
+                    let result =
+                        try LimitedCleanerService.clean(
+                            containerURL: URL(
+                                fileURLWithPath:
+                                    containerPath,
+                                isDirectory: true
+                            ),
+                            rootValidator: {
+                                ContainerStore
+                                    .isApplicationContainerPath(
+                                        $0.path
+                                    )
+                            }
+                        )
+
+                    updatedUsage[
+                        record.id
+                    ] = result.after
+
+                    freedBytes +=
+                        result.freedBytes
+
+                    removedItems +=
+                        result.removedItemCount
+
+                    failedItems +=
+                        result.failedItemCount
+
                     log(
-                        "cleaner: cleaned \(record.app.bundleID) " +
-                            "freed=\(result.freedBytes) removed=\(result.removedItemCount) " +
-                            "failed=\(result.failedItemCount)"
+                        "cleaner: cleaned " +
+                        "\(record.app.bundleID) " +
+                        "freed=\(result.freedBytes) " +
+                        "removed=\(result.removedItemCount) " +
+                        "failed=\(result.failedItemCount)"
                     )
+
                 } catch {
                     unavailableApps += 1
-                    log("cleaner: failed \(record.app.bundleID) error=\(error)")
+
+                    log(
+                        "cleaner: failed " +
+                        "\(record.app.bundleID) " +
+                        "error=\(error)"
+                    )
                 }
             }
 
-            let resultMessage = language.text(
-                "cleaner.result_message",
-                sizeText(freedBytes),
-                Int64(removedItems),
-                Int64(failedItems + unavailableApps)
-            )
+            let resultMessage =
+                language.text(
+                    "cleaner.result_message",
+                    sizeText(freedBytes),
+                    Int64(removedItems),
+                    Int64(
+                        failedItems +
+                        unavailableApps
+                    )
+                )
+
             DispatchQueue.main.async {
-                records = records.compactMap { record in
-                    guard let usage = updatedUsage[record.id] else { return record }
-                    guard usage.totalBytes > 0 else { return nil }
-                    return CleanerAppRecord(app: record.app, usage: usage)
-                }
+                records =
+                    records.compactMap {
+                        record in
+
+                        guard
+                            let usage =
+                                updatedUsage[
+                                    record.id
+                                ]
+                        else {
+                            return record
+                        }
+
+                        guard
+                            usage.totalBytes > 0
+                        else {
+                            return nil
+                        }
+
+                        return CleanerAppRecord(
+                            app: record.app,
+                            usage: usage
+                        )
+                    }
+
                 selectedBundleIDs.removeAll()
                 isCleaning = false
-                activeAlert = .result(message: resultMessage)
+
+                activeAlert =
+                    .result(
+                        message: resultMessage
+                    )
             }
         }
     }
 
-    private func sizeText(_ byteCount: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
+    private func sizeText(
+        _ byteCount: Int64
+    ) -> String {
+        ByteCountFormatter.string(
+            fromByteCount: byteCount,
+            countStyle: .file
+        )
     }
 }
+
+// MARK: - Models
 
 private struct CleanerAppRecord: Identifiable {
     let app: InstalledApp
     let usage: LimitedCleanerUsage
 
-    var id: String { app.bundleID }
+    var id: String {
+        app.bundleID
+    }
 }
 
 private enum CleanerAlert: Identifiable {
@@ -771,8 +1331,11 @@ private enum CleanerAlert: Identifiable {
 
     var id: String {
         switch self {
-        case .confirmation: return "confirmation"
-        case .result(let message): return "result-\(message)"
+        case .confirmation:
+            return "confirmation"
+
+        case .result(let message):
+            return "result-\(message)"
         }
     }
 }
