@@ -1,340 +1,103 @@
 import Foundation
-import Darwin
 
 struct LimitedCleanerUsage: Equatable {
-    let cacheBytes: Int64
-    let temporaryBytes: Int64
-    let removableItemCount: Int
+    let totalBytes: Int64
+    let fileCount: Int
 
     static let empty = LimitedCleanerUsage(
-        cacheBytes: 0,
-        temporaryBytes: 0,
-        removableItemCount: 0
+        totalBytes: 0,
+        fileCount: 0
     )
-
-    var totalBytes: Int64 {
-        cacheBytes + temporaryBytes
-    }
 }
 
-struct LimitedCleanerResult: Equatable {
-    let before: LimitedCleanerUsage
-    let after: LimitedCleanerUsage
-    let removedItemCount: Int
-    let failedItemCount: Int
+struct LimitedCleanerItem: Identifiable, Equatable {
+    let id: String
+    let url: URL
+    let size: Int64
 
-    var freedBytes: Int64 {
-        max(0, before.totalBytes - after.totalBytes)
+    var name: String {
+        url.lastPathComponent
     }
-}
-
-enum LimitedCleanerError: Error, Equatable {
-    case unsafeContainerRoot
 }
 
 enum LimitedCleanerService {
-    typealias ContainerRootValidator = (URL) -> Bool
 
-    /// This explicit allowlist is the product boundary. Do not add global `/var`
-    /// paths here: this cleaner is intentionally limited to per-app disposable data.
-    static let allowedRelativeDirectories = ["Library/Caches", "tmp"]
+    private static let fileManager = FileManager.default
 
-    static func scan(
-        containerURL: URL,
-        rootValidator: ContainerRootValidator
-    ) throws -> LimitedCleanerUsage {
-        try withValidatedRootDescriptor(containerURL, rootValidator: rootValidator) { rootDescriptor in
-            let cache = scanAllowedDirectory(
-                components: ["Library", "Caches"],
-                rootDescriptor: rootDescriptor
-            )
-            let temporary = scanAllowedDirectory(
-                components: ["tmp"],
-                rootDescriptor: rootDescriptor
-            )
-            return LimitedCleanerUsage(
-                cacheBytes: cache.bytes,
-                temporaryBytes: temporary.bytes,
-                removableItemCount: cache.itemCount + temporary.itemCount
-            )
-        }
+    // Only directories belonging to NIGHTSHIFT's own sandbox.
+    private static var cacheDirectory: URL {
+        fileManager.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        )[0]
     }
 
-    static func clean(
-        containerURL: URL,
-        rootValidator: ContainerRootValidator
-    ) throws -> LimitedCleanerResult {
-        let before = try scan(containerURL: containerURL, rootValidator: rootValidator)
-        var removal = RemovalSummary()
-
-        try withValidatedRootDescriptor(containerURL, rootValidator: rootValidator) { rootDescriptor in
-            for components in [["Library", "Caches"], ["tmp"]] {
-                guard let directoryDescriptor = openDirectory(
-                    components: components,
-                    relativeTo: rootDescriptor
-                ) else {
-                    continue
-                }
-                removeDirectoryContents(directoryDescriptor, summary: &removal)
-                close(directoryDescriptor)
-            }
-        }
-
-        let after = try scan(containerURL: containerURL, rootValidator: rootValidator)
-        return LimitedCleanerResult(
-            before: before,
-            after: after,
-            removedItemCount: removal.removedItemCount,
-            failedItemCount: removal.failedItemCount
-        )
+    private static var temporaryDirectory: URL {
+        fileManager.temporaryDirectory
     }
 
-    private static func withValidatedRootDescriptor<T>(
-        _ rawURL: URL,
-        rootValidator: ContainerRootValidator,
-        operation: (Int32) throws -> T
-    ) throws -> T {
-        guard rawURL.isFileURL else { throw LimitedCleanerError.unsafeContainerRoot }
-        let root = rawURL.standardizedFileURL
-        guard root.path.hasPrefix("/"),
-              root.path != "/",
-              rootValidator(root) else {
-            throw LimitedCleanerError.unsafeContainerRoot
-        }
-
-        let descriptor = open(
-            root.path,
-            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
-        )
-        guard descriptor >= 0 else { throw LimitedCleanerError.unsafeContainerRoot }
-        defer { close(descriptor) }
-        return try operation(descriptor)
+    private static var allowedDirectories: [URL] {
+        [
+            cacheDirectory,
+            temporaryDirectory
+        ]
     }
 
-    private static func scanAllowedDirectory(
-        components: [String],
-        rootDescriptor: Int32
-    ) -> ScanSummary {
-        guard let directoryDescriptor = openDirectory(
-            components: components,
-            relativeTo: rootDescriptor
-        ) else {
-            return .empty
-        }
-        defer { close(directoryDescriptor) }
-        return scanDirectory(directoryDescriptor)
-    }
+    // MARK: - Scan
 
-    private static func openDirectory(
-        components: [String],
-        relativeTo rootDescriptor: Int32
-    ) -> Int32? {
-        var currentDescriptor = dup(rootDescriptor)
-        guard currentDescriptor >= 0 else { return nil }
-
-        for component in components {
-            let nextDescriptor = component.withCString {
-                openat(
-                    currentDescriptor,
-                    $0,
-                    O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
-                )
-            }
-            close(currentDescriptor)
-            guard nextDescriptor >= 0 else { return nil }
-            currentDescriptor = nextDescriptor
-        }
-        return currentDescriptor
-    }
-
-    private static func scanDirectory(_ directoryDescriptor: Int32) -> ScanSummary {
-        var result = ScanSummary.empty
-        forEachEntry(in: directoryDescriptor) { name, information in
-            switch information.st_mode & S_IFMT {
-            case S_IFREG:
-                result.bytes += max(0, Int64(information.st_size))
-                result.itemCount += 1
-            case S_IFDIR:
-                let childDescriptor = name.withCString {
-                    openat(
-                        directoryDescriptor,
-                        $0,
-                        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
-                    )
-                }
-                guard childDescriptor >= 0 else { return }
-                let nested = scanDirectory(childDescriptor)
-                close(childDescriptor)
-                result.bytes += nested.bytes
-                result.itemCount += nested.itemCount
-            default:
-                // Symbolic links, sockets and device nodes are never followed or counted.
-                break
-            }
-        }
-        return result
-    }
-
-    private static func removeDirectoryContents(
-        _ directoryDescriptor: Int32,
-        summary: inout RemovalSummary
-    ) {
-        forEachEntry(in: directoryDescriptor) { name, information in
-            switch information.st_mode & S_IFMT {
-            case S_IFREG:
-                let result = name.withCString { unlinkat(directoryDescriptor, $0, 0) }
-                if result == 0 {
-                    summary.removedItemCount += 1
-                } else if errno != ENOENT {
-                    summary.failedItemCount += 1
-                }
-            case S_IFDIR:
-                let childDescriptor = name.withCString {
-                    openat(
-                        directoryDescriptor,
-                        $0,
-                        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
-                    )
-                }
-                guard childDescriptor >= 0 else {
-                    if errno != ENOENT && errno != ELOOP {
-                        summary.failedItemCount += 1
-                    }
-                    return
-                }
-                removeDirectoryContents(childDescriptor, summary: &summary)
-                close(childDescriptor)
-
-                let result = name.withCString {
-                    unlinkat(directoryDescriptor, $0, AT_REMOVEDIR)
-                }
-                if result != 0,
-                   errno != ENOENT,
-                   errno != ENOTEMPTY {
-                    summary.failedItemCount += 1
-                }
-            default:
-                // Preserve and never follow symbolic links or special nodes.
-                break
-            }
-        }
-    }
-
-    private static func forEachEntry(
-        in directoryDescriptor: Int32,
-        body: (String, stat) -> Void
-    ) {
-        let iterationDescriptor = dup(directoryDescriptor)
-        guard iterationDescriptor >= 0,
-              let directory = fdopendir(iterationDescriptor) else {
-            if iterationDescriptor >= 0 { close(iterationDescriptor) }
-            return
-        }
-        defer { closedir(directory) }
-
-        while let entry = readdir(directory) {
-            let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer in
-                pointer.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
-                    String(cString: $0)
-                }
-            }
-            guard name != ".", name != ".." else { continue }
-
-            var information = stat()
-            let status = name.withCString {
-                fstatat(directoryDescriptor, $0, &information, AT_SYMLINK_NOFOLLOW)
-            }
-            guard status == 0 else { continue }
-            body(name, information)
-        }
-    }
-}
-
-private struct ScanSummary {
-    var bytes: Int64
-    var itemCount: Int
-
-    static let empty = ScanSummary(bytes: 0, itemCount: 0)
-}
-
-private struct RemovalSummary {
-    var removedItemCount = 0
-    var failedItemCount = 0
-}
-
-
-// MARK: - NIGHTSHIFT global cache cleaner
-//
-// This is intentionally narrower than "delete all Data System":
-// only the global mobile cache directory is touched. Logs, databases,
-// preferences, snapshots, and other system-managed state are left alone.
-struct SystemCacheUsage: Equatable {
-    let bytes: Int64
-    let itemCount: Int
-    let accessible: Bool
-
-    static let unavailable = SystemCacheUsage(bytes: 0, itemCount: 0, accessible: false)
-}
-
-struct SystemCacheCleanResult: Equatable {
-    let before: SystemCacheUsage
-    let after: SystemCacheUsage
-    let removedItemCount: Int
-    let failedItemCount: Int
-
-    var freedBytes: Int64 {
-        max(0, before.bytes - after.bytes)
-    }
-}
-
-enum SystemCacheCleanerService {
-    // Do not broaden this list to arbitrary /var/mobile paths.
-    private static let allowedDirectories = [
-        URL(fileURLWithPath: "/var/mobile/Library/Caches", isDirectory: true)
-    ]
-
-    static func scan() -> SystemCacheUsage {
+    static func scan() -> LimitedCleanerUsage {
         var totalBytes: Int64 = 0
-        var totalItems = 0
-        var sawAccessibleDirectory = false
+        var fileCount = 0
 
         for directory in allowedDirectories {
-            guard FileManager.default.fileExists(atPath: directory.path) else { continue }
-            sawAccessibleDirectory = true
             scanDirectory(
                 directory,
-                bytes: &totalBytes,
-                items: &totalItems
+                totalBytes: &totalBytes,
+                fileCount: &fileCount
             )
         }
 
-        return SystemCacheUsage(
-            bytes: totalBytes,
-            itemCount: totalItems,
-            accessible: sawAccessibleDirectory
+        return LimitedCleanerUsage(
+            totalBytes: totalBytes,
+            fileCount: fileCount
         )
     }
 
-    static func clean() -> SystemCacheCleanResult {
-        let before = scan()
-        guard before.accessible else {
-            return SystemCacheCleanResult(
-                before: before,
-                after: before,
-                removedItemCount: 0,
-                failedItemCount: 0
+    // MARK: - Items
+
+    static func items() -> [LimitedCleanerItem] {
+        var result: [LimitedCleanerItem] = []
+
+        for directory in allowedDirectories {
+            collectItems(
+                from: directory,
+                into: &result
             )
         }
 
-        var removed = 0
-        var failed = 0
-        let fm = FileManager.default
+        return result.sorted {
+            if $0.size != $1.size {
+                return $0.size > $1.size
+            }
 
+            return $0.name.localizedCaseInsensitiveCompare(
+                $1.name
+            ) == .orderedAscending
+        }
+    }
+
+    // MARK: - Clean
+
+    @discardableResult
+    static func clean() -> LimitedCleanerUsage {
         for directory in allowedDirectories {
             guard
-                let children = try? fm.contentsOfDirectory(
+                let children = try? fileManager.contentsOfDirectory(
                     at: directory,
-                    includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                    includingPropertiesForKeys: [
+                        .isDirectoryKey,
+                        .isSymbolicLinkKey
+                    ],
                     options: []
                 )
             else {
@@ -344,48 +107,60 @@ enum SystemCacheCleanerService {
             for child in children {
                 do {
                     let values = try child.resourceValues(
-                        forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+                        forKeys: [
+                            .isDirectoryKey,
+                            .isSymbolicLinkKey
+                        ]
                     )
 
-                    // Never follow or remove symlinks.
-                    guard values.isSymbolicLink != true else { continue }
+                    // Never follow symbolic links.
+                    guard values.isSymbolicLink != true else {
+                        continue
+                    }
 
-                    // Remove only contents of the allowlisted cache root.
-                    // Protected/locked items simply count as failures.
-                    try fm.removeItem(at: child)
-                    removed += 1
+                    try fileManager.removeItem(
+                        at: child
+                    )
                 } catch {
-                    failed += 1
+                    // Some files can legitimately be in use.
+                    // Continue cleaning the remaining accessible files.
+                    continue
                 }
             }
         }
 
-        let after = scan()
-        return SystemCacheCleanResult(
-            before: before,
-            after: after,
-            removedItemCount: removed,
-            failedItemCount: failed
-        )
+        return scan()
     }
+
+    // MARK: - Private scan helpers
 
     private static func scanDirectory(
         _ directory: URL,
-        bytes: inout Int64,
-        items: inout Int
+        totalBytes: inout Int64,
+        fileCount: inout Int
     ) {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [
-                .isRegularFileKey,
-                .isDirectoryKey,
-                .isSymbolicLinkKey,
-                .fileSizeKey
-            ],
-            options: [],
-            errorHandler: { _, _ in true }
-        ) else {
+        guard
+            fileManager.fileExists(
+                atPath: directory.path
+            )
+        else {
+            return
+        }
+
+        guard
+            let enumerator = fileManager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                    .fileSizeKey
+                ],
+                options: [],
+                errorHandler: { _, _ in
+                    true
+                }
+            )
+        else {
             return
         }
 
@@ -403,10 +178,79 @@ enum SystemCacheCleanerService {
                 continue
             }
 
-            if values.isRegularFile == true {
-                bytes += Int64(max(0, values.fileSize ?? 0))
-                items += 1
+            guard values.isRegularFile == true else {
+                continue
             }
+
+            totalBytes += Int64(
+                max(
+                    0,
+                    values.fileSize ?? 0
+                )
+            )
+
+            fileCount += 1
+        }
+    }
+
+    private static func collectItems(
+        from directory: URL,
+        into result: inout [LimitedCleanerItem]
+    ) {
+        guard
+            fileManager.fileExists(
+                atPath: directory.path
+            )
+        else {
+            return
+        }
+
+        guard
+            let enumerator = fileManager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                    .fileSizeKey
+                ],
+                options: [],
+                errorHandler: { _, _ in
+                    true
+                }
+            )
+        else {
+            return
+        }
+
+        for case let url as URL in enumerator {
+            guard
+                let values = try? url.resourceValues(
+                    forKeys: [
+                        .isRegularFileKey,
+                        .isSymbolicLinkKey,
+                        .fileSizeKey
+                    ]
+                ),
+                values.isSymbolicLink != true,
+                values.isRegularFile == true
+            else {
+                continue
+            }
+
+            let size = Int64(
+                max(
+                    0,
+                    values.fileSize ?? 0
+                )
+            )
+
+            result.append(
+                LimitedCleanerItem(
+                    id: url.path,
+                    url: url,
+                    size: size
+                )
+            )
         }
     }
 }
