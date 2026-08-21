@@ -53,37 +53,8 @@ struct OTAControlView: View {
                             }
                         }
 
-                        if let result {
-                            CyberPanel {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Text("DIAGNOSTIC")
-                                        .font(AppTheme.monoFont)
-                                        .tracking(1.4)
-                                        .foregroundStyle(.secondary)
-
-                                    ForEach(result.details, id: \.self) { detail in
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption2.weight(.bold))
-                                                .foregroundStyle(AppTheme.accent)
-
-                                            Text(detail)
-                                                .font(.caption.monospaced())
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-
-                                    Text(
-                                        "Checked \(result.checkedAt.formatted(
-                                            date: .abbreviated,
-                                            time: .shortened
-                                        ))"
-                                    )
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.top, 4)
-                                }
-                            }
+                        if let currentResult = result {
+                            diagnosticPanel(currentResult)
                         }
 
                         Button {
@@ -97,12 +68,8 @@ struct OTAControlView: View {
                                     Image(systemName: "waveform.path.ecg")
                                 }
 
-                                Text(
-                                    isChecking
-                                        ? "CHECKING…"
-                                        : "CHECK OTA STATUS"
-                                )
-                                .font(.headline.weight(.bold))
+                                Text(isChecking ? "CHECKING..." : "CHECK OTA STATUS")
+                                    .font(.headline.weight(.bold))
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -157,6 +124,39 @@ struct OTAControlView: View {
                 }
 
                 Spacer()
+            }
+        }
+    }
+
+    private func diagnosticPanel(_ currentResult: OTAProbeResult) -> some View {
+        let checkedText = currentResult.checkedAt.formatted(
+            date: .abbreviated,
+            time: .shortened
+        )
+
+        return CyberPanel {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("DIAGNOSTIC")
+                    .font(AppTheme.monoFont)
+                    .tracking(1.4)
+                    .foregroundStyle(.secondary)
+
+                ForEach(currentResult.details, id: \.self) { detail in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(AppTheme.accent)
+
+                        Text(detail)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text("Checked " + checkedText)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 4)
             }
         }
     }
@@ -228,15 +228,6 @@ struct OTAControlView: View {
         isChecking = true
 
         DispatchQueue.global(qos: .userInitiated).async {
-            // Deliberately conservative:
-            // 3105's process may not be able to read the protected
-            // OTA plist on every supported build.
-            //
-            // We therefore report "unknown" unless an accessible
-            // probe can establish a known state.
-            //
-            // No system mutation is performed.
-
             let details = [
                 "iOS: \(AppInfo.osVersion) (\(AppInfo.osBuild))",
                 "Read-only mode: ENABLED",
@@ -261,8 +252,6 @@ struct OTAControlView: View {
 
 private enum SystemOTAProbe {
 
-    // Accessibility probe only.
-    // This does not attempt to bypass sandbox protections.
     static let probePath =
         "/var/mobile/Library/Preferences/com.apple.MobileAsset.plist"
 
