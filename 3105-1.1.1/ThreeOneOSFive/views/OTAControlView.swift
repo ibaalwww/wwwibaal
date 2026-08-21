@@ -38,9 +38,16 @@ struct OTAControlView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
 
-                                Divider().overlay(AppTheme.panelBorder)
+                                Divider()
+                                    .overlay(AppTheme.panelBorder)
 
-                                checkRow("OTA configuration", result?.status == .blocked ? "Potential block detected" : "Read-only probe")
+                                checkRow(
+                                    "OTA configuration",
+                                    result?.status == .blocked
+                                        ? "Potential block detected"
+                                        : "Read-only probe"
+                                )
+
                                 checkRow("System changes", "NONE")
                                 checkRow("Restore action", "DISABLED")
                             }
@@ -59,16 +66,22 @@ struct OTAControlView: View {
                                             Image(systemName: "chevron.right")
                                                 .font(.caption2.weight(.bold))
                                                 .foregroundStyle(AppTheme.accent)
+
                                             Text(detail)
                                                 .font(.caption.monospaced())
                                                 .foregroundStyle(.secondary)
                                         }
                                     }
 
-                                    Text("Checked \(result.checkedAt.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(.tertiary)
-                                        .padding(.top, 4)
+                                    Text(
+                                        "Checked \(result.checkedAt.formatted(
+                                            date: .abbreviated,
+                                            time: .shortened
+                                        ))"
+                                    )
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.top, 4)
                                 }
                             }
                         }
@@ -78,12 +91,18 @@ struct OTAControlView: View {
                         } label: {
                             HStack {
                                 if isChecking {
-                                    ProgressView().controlSize(.small)
+                                    ProgressView()
+                                        .controlSize(.small)
                                 } else {
                                     Image(systemName: "waveform.path.ecg")
                                 }
-                                Text(isChecking ? "CHECKING…" : "CHECK OTA STATUS")
-                                    .font(.headline.weight(.bold))
+
+                                Text(
+                                    isChecking
+                                        ? "CHECKING…"
+                                        : "CHECK OTA STATUS"
+                                )
+                                .font(.headline.weight(.bold))
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
@@ -106,6 +125,7 @@ struct OTAControlView: View {
         VStack(alignment: .leading, spacing: 5) {
             Text("OTA CONTROL")
                 .font(AppTheme.titleFont)
+
             Text("READ-ONLY SYSTEM DIAGNOSTIC")
                 .font(AppTheme.monoFont)
                 .tracking(1.5)
@@ -119,6 +139,7 @@ struct OTAControlView: View {
                 ZStack {
                     Circle()
                         .fill(statusColor.opacity(0.14))
+
                     Image(systemName: statusIcon)
                         .font(.system(size: 26, weight: .bold))
                         .foregroundStyle(statusColor)
@@ -142,17 +163,27 @@ struct OTAControlView: View {
 
     private var statusColor: Color {
         switch result?.status {
-        case .blocked: return AppTheme.secondaryAccent
-        case .clear: return AppTheme.accent
-        case .unknown, nil: return .secondary
+        case .blocked:
+            return AppTheme.secondaryAccent
+
+        case .clear:
+            return AppTheme.accent
+
+        case .unknown, nil:
+            return .secondary
         }
     }
 
     private var statusIcon: String {
         switch result?.status {
-        case .blocked: return "exclamationmark.triangle.fill"
-        case .clear: return "checkmark.shield.fill"
-        case .unknown, nil: return "questionmark"
+        case .blocked:
+            return "exclamationmark.triangle.fill"
+
+        case .clear:
+            return "checkmark.shield.fill"
+
+        case .unknown, nil:
+            return "questionmark"
         }
     }
 
@@ -160,19 +191,29 @@ struct OTAControlView: View {
         switch result?.status {
         case .blocked:
             return "A potentially modified OTA configuration was detected."
+
         case .clear:
             return "No known OTA block signature was detected."
+
         case .unknown:
+            return "OTA state could not be verified."
+
+        case nil:
             return "Run a read-only diagnostic."
         }
     }
 
-    private func checkRow(_ title: String, _ value: String) -> some View {
+    private func checkRow(
+        _ title: String,
+        _ value: String
+    ) -> some View {
         HStack {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
             Spacer()
+
             Text(value)
                 .font(.caption.monospaced())
                 .foregroundStyle(.white.opacity(0.85))
@@ -180,14 +221,22 @@ struct OTAControlView: View {
     }
 
     private func checkOTA() {
-        guard !isChecking else { return }
+        guard !isChecking else {
+            return
+        }
+
         isChecking = true
 
         DispatchQueue.global(qos: .userInitiated).async {
-            // Deliberately conservative: 3105's process may not be able to
-            // read the protected OTA plist on every supported build.
-            // We therefore report "unknown" unless an accessible probe can
-            // establish a known state. No system mutation is performed.
+            // Deliberately conservative:
+            // 3105's process may not be able to read the protected
+            // OTA plist on every supported build.
+            //
+            // We therefore report "unknown" unless an accessible
+            // probe can establish a known state.
+            //
+            // No system mutation is performed.
+
             let details = [
                 "iOS: \(AppInfo.osVersion) (\(AppInfo.osBuild))",
                 "Read-only mode: ENABLED",
@@ -211,9 +260,11 @@ struct OTAControlView: View {
 }
 
 private enum SystemOTAProbe {
-    // We intentionally do not attempt to bypass iOS sandbox protections.
-    // This path is used only as an accessibility probe.
-    static let probePath = "/var/mobile/Library/Preferences/com.apple.MobileAsset.plist"
+
+    // Accessibility probe only.
+    // This does not attempt to bypass sandbox protections.
+    static let probePath =
+        "/var/mobile/Library/Preferences/com.apple.MobileAsset.plist"
 
     static var isAccessible: Bool {
         FileManager.default.isReadableFile(atPath: probePath)
@@ -223,6 +274,7 @@ private enum SystemOTAProbe {
         if isAccessible {
             return "OTA preference path is readable; signature decoding is not enabled in this build."
         }
+
         return "OTA preference path is protected/unreadable from this process."
     }
 }
