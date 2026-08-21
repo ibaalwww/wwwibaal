@@ -1,4 +1,4 @@
-name: NIGHTSHIFT Build
+name: NIGHTSHIFT Build Diagnostic
 
 on:
   workflow_dispatch:
@@ -19,63 +19,50 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Find Xcode project
+      - name: Locate project
         run: |
-          find . -name "*.xcodeproj" -maxdepth 5 -print
+          find . -name "ThreeOneOSFive.xcodeproj" -print
 
-      - name: Build
+      - name: Build with full compiler diagnostics
+        shell: bash
         run: |
-          PROJECT=$(find . -name "ThreeOneOSFive.xcodeproj" -maxdepth 5 -print -quit)
+          set -o pipefail
+
+          PROJECT=$(find . -name "ThreeOneOSFive.xcodeproj" -print -quit)
 
           if [ -z "$PROJECT" ]; then
-            echo "ThreeOneOSFive.xcodeproj tidak ditemukan"
+            echo "::error::ThreeOneOSFive.xcodeproj tidak ditemukan"
             exit 1
           fi
 
-          SCHEME=$(xcodebuild -project "$PROJECT" -list \
-            | sed -n '/Schemes:/,/^$/p' \
-            | tail -n +2 \
-            | sed '/^[[:space:]]*$/d' \
-            | head -n 1 \
-            | xargs)
-
-          echo "Project: $PROJECT"
-          echo "Scheme: $SCHEME"
-
-          if [ -z "$SCHEME" ]; then
-            echo "Scheme tidak ditemukan"
-            exit 1
-          fi
+          echo "PROJECT=$PROJECT"
 
           mkdir -p build
 
           xcodebuild \
             -project "$PROJECT" \
-            -scheme "$SCHEME" \
+            -scheme "3105" \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build
+            SWIFT_SUPPRESS_WARNINGS=NO \
+            clean build \
+            2>&1 | tee build/xcodebuild.log
 
-      - name: Package app
+      - name: Show compiler errors
+        if: failure()
         run: |
-          APP=$(find build/DerivedData/Build/Products -name "*.app" -type d | head -n 1)
+          echo "===== COMPILER ERRORS ====="
+          grep -n -E "error:|fatal error:" build/xcodebuild.log || true
 
-          if [ -z "$APP" ]; then
-            echo "Tidak menemukan .app"
-            exit 1
-          fi
+          echo "===== LAST 200 LINES ====="
+          tail -n 200 build/xcodebuild.log
 
-          mkdir -p artifacts
-          cp -R "$APP" artifacts/
-
-          cd artifacts
-          zip -r NIGHTSHIFT-unsigned.zip "$(basename "$APP")"
-
-      - name: Upload build artifact
+      - name: Upload diagnostic log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: NIGHTSHIFT-build
-          path: artifacts/NIGHTSHIFT-unsigned.zip
+          name: NIGHTSHIFT-xcode-diagnostic
+          path: build/xcodebuild.log
