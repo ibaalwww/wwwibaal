@@ -315,7 +315,7 @@ private struct DashboardView: View {
 
                 statusRow("DEVICE", AppInfo.displayMachineName)
                 statusRow("iOS", "\(AppInfo.osVersion) (\(AppInfo.osBuild))")
-                statusRow("ENGINE", "3105 / \(AppInfo.version)")
+                statusRow("ENGINE", "3105")
             }
         }
     }
