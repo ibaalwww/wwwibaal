@@ -1,4 +1,4 @@
-name: NIGHTSHIFT Build Diagnostic
+name: NIGHTSHIFT Final Build
 
 on:
   workflow_dispatch:
@@ -21,13 +21,6 @@ jobs:
 
       - name: Locate project
         run: |
-          find . -name "ThreeOneOSFive.xcodeproj" -print
-
-      - name: Build with full compiler diagnostics
-        shell: bash
-        run: |
-          set -o pipefail
-
           PROJECT=$(find . -name "ThreeOneOSFive.xcodeproj" -print -quit)
 
           if [ -z "$PROJECT" ]; then
@@ -35,8 +28,14 @@ jobs:
             exit 1
           fi
 
-          echo "PROJECT=$PROJECT"
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+          echo "Found: $PROJECT"
 
+      - name: Build Release
+        run: |
+          set -o pipefail
+
+          rm -rf build
           mkdir -p build
 
           xcodebuild \
@@ -47,22 +46,44 @@ jobs:
             -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            SWIFT_SUPPRESS_WARNINGS=NO \
-            clean build \
-            2>&1 | tee build/xcodebuild.log
+            clean build
 
-      - name: Show compiler errors
-        if: failure()
+      - name: Locate built app
         run: |
-          echo "===== COMPILER ERRORS ====="
-          grep -n -E "error:|fatal error:" build/xcodebuild.log || true
+          APP=$(find build/DerivedData/Build/Products/Release-iphoneos \
+            -maxdepth 1 \
+            -name "*.app" \
+            -print \
+            -quit)
 
-          echo "===== LAST 200 LINES ====="
-          tail -n 200 build/xcodebuild.log
+          if [ -z "$APP" ]; then
+            echo "::error::File .app tidak ditemukan"
+            exit 1
+          fi
 
-      - name: Upload diagnostic log
-        if: always()
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          echo "Built app: $APP"
+
+      - name: Package unsigned IPA
+        run: |
+          rm -rf build/Payload
+          mkdir -p build/Payload
+
+          cp -R "$APP" build/Payload/
+
+          cd build
+          zip -r NIGHTSHIFT-3105-unsigned.ipa Payload
+
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NIGHTSHIFT-xcode-diagnostic
-          path: build/xcodebuild.log
+          name: NIGHTSHIFT-3105-unsigned
+          path: build/NIGHTSHIFT-3105-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload APP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NIGHTSHIFT-3105-APP
+          path: ${{ env.APP }}
+          if-no-files-found: error
