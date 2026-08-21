@@ -1,1 +1,81 @@
+name: NIGHTSHIFT Build
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Find Xcode project
+        run: |
+          find . -name "*.xcodeproj" -maxdepth 5 -print
+
+      - name: Build
+        run: |
+          PROJECT=$(find . -name "ThreeOneOSFive.xcodeproj" -maxdepth 5 -print -quit)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ThreeOneOSFive.xcodeproj tidak ditemukan"
+            exit 1
+          fi
+
+          SCHEME=$(xcodebuild -project "$PROJECT" -list \
+            | sed -n '/Schemes:/,/^$/p' \
+            | tail -n +2 \
+            | sed '/^[[:space:]]*$/d' \
+            | head -n 1 \
+            | xargs)
+
+          echo "Project: $PROJECT"
+          echo "Scheme: $SCHEME"
+
+          if [ -z "$SCHEME" ]; then
+            echo "Scheme tidak ditemukan"
+            exit 1
+          fi
+
+          mkdir -p build
+
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package app
+        run: |
+          APP=$(find build/DerivedData/Build/Products -name "*.app" -type d | head -n 1)
+
+          if [ -z "$APP" ]; then
+            echo "Tidak menemukan .app"
+            exit 1
+          fi
+
+          mkdir -p artifacts
+          cp -R "$APP" artifacts/
+
+          cd artifacts
+          zip -r NIGHTSHIFT-unsigned.zip "$(basename "$APP")"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NIGHTSHIFT-build
+          path: artifacts/NIGHTSHIFT-unsigned.zip
